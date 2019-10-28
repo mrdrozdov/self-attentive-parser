@@ -1069,7 +1069,7 @@ class NKChartParser(nn.Module):
             charts = []
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
                 sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
-                chart = self.label_scores_from_annotations(sequence_container)
+                chart = sequence_container.label_scores_chart
                 charts.append(chart.cpu().data.numpy())
             return charts
 
@@ -1137,14 +1137,6 @@ class NKChartParser(nn.Module):
             return None, (loss, tag_loss)
         else:
             return None, loss
-
-    def label_scores_from_annotations(self, sequence_container):
-        label_scores_chart = self.f_label(sequence_container.span_features)
-        label_scores_chart = torch.cat([
-            label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
-            label_scores_chart
-            ], 2)
-        return label_scores_chart
 
     def parse_from_annotations(self, sequence_container, sentence, gold=None):
         is_train = gold is not None
@@ -1217,10 +1209,21 @@ class NKChartParser(nn.Module):
 
 
 class RNNSequenceContainer(object):
-    def __init__(self, fencepost_annotations_start, fencepost_annotations_end):
+    def __init__(self, fencepost_annotations_start, fencepost_annotations_end, f_label):
+        self.f_label = f_label
+
         # # Dimensions # #
         # TODO: This should be wrapped.
         # fencepost_annotations_start : length x hidden_dim
         # span_features : length x length x hidden_dim
         self.span_features = (torch.unsqueeze(fencepost_annotations_end, 0)
              - torch.unsqueeze(fencepost_annotations_start, 1))
+        self.label_scores_chart = self.label_scores_from_annotations(self.span_features)
+
+    def label_scores_from_annotations(self, span_features):
+        label_scores_chart = self.f_label(span_features)
+        label_scores_chart = torch.cat([
+            label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
+            label_scores_chart
+            ], 2)
+        return label_scores_chart
