@@ -1068,7 +1068,8 @@ class NKChartParser(nn.Module):
         if return_label_scores_charts:
             charts = []
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                chart = self.label_scores_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                chart = self.label_scores_from_annotations(sequence_container)
                 charts.append(chart.cpu().data.numpy())
             return charts
 
@@ -1085,7 +1086,8 @@ class NKChartParser(nn.Module):
                 sentence = sentences[i]
                 if self.f_tag is not None:
                     sentence = list(zip(per_sentence_tags[i], [x[1] for x in sentence]))
-                tree, score = self.parse_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentence, golds[i])
+                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                tree, score = self.parse_from_annotations(sequence_container, sentence, golds[i])
                 trees.append(tree)
                 scores.append(score)
             return trees, scores
@@ -1108,7 +1110,8 @@ class NKChartParser(nn.Module):
         glabels = []
         with torch.no_grad():
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentences[i], golds[i])
+                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(sequence_container, sentences[i], golds[i])
                 paugment_total += p_augment
                 num_p += p_i.shape[0]
                 pis.append(p_i + start)
@@ -1135,22 +1138,17 @@ class NKChartParser(nn.Module):
         else:
             return None, loss
 
-    def label_scores_from_annotations(self, fencepost_annotations_start, fencepost_annotations_end):
-        # Note that the bias added to the final layer norm is useless because
-        # this subtraction gets rid of it
-        span_features = (torch.unsqueeze(fencepost_annotations_end, 0)
-                         - torch.unsqueeze(fencepost_annotations_start, 1))
-
-        label_scores_chart = self.f_label(span_features)
+    def label_scores_from_annotations(self, sequence_container):
+        label_scores_chart = self.f_label(sequence_container.span_features)
         label_scores_chart = torch.cat([
             label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
             label_scores_chart
             ], 2)
         return label_scores_chart
 
-    def parse_from_annotations(self, fencepost_annotations_start, fencepost_annotations_end, sentence, gold=None):
+    def parse_from_annotations(self, sequence_container, sentence, gold=None):
         is_train = gold is not None
-        label_scores_chart = self.label_scores_from_annotations(fencepost_annotations_start, fencepost_annotations_end)
+        label_scores_chart = self.label_scores_from_annotations(sequence_container)
         label_scores_chart_np = label_scores_chart.cpu().data.numpy()
 
         if is_train:
@@ -1216,3 +1214,13 @@ class NKChartParser(nn.Module):
 
         tree = make_tree()[0]
         return tree, score
+
+
+class RNNSequenceContainer(object):
+    def __init__(self, fencepost_annotations_start, fencepost_annotations_end):
+        # # Dimensions # #
+        # TODO: This should be wrapped.
+        # fencepost_annotations_start : length x hidden_dim
+        # span_features : length x length x hidden_dim
+        self.span_features = (torch.unsqueeze(fencepost_annotations_end, 0)
+             - torch.unsqueeze(fencepost_annotations_start, 1))
