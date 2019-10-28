@@ -18,7 +18,8 @@ else:
 
 import pyximport
 pyximport.install(setup_args={"include_dirs": np.get_include()})
-import chart_helper
+# import chart_helper
+import chart_helper_python as chart_helper
 import nkutil
 
 import trees
