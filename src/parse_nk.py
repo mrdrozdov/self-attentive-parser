@@ -16,8 +16,6 @@ else:
     torch_t = torch
     from torch import from_numpy
 
-import pyximport
-pyximport.install(setup_args={"include_dirs": np.get_include()})
 # import chart_helper
 import chart_helper_python as chart_helper
 import nkutil
@@ -1068,7 +1066,7 @@ class NKChartParser(nn.Module):
         if return_label_scores_charts:
             charts = []
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
                 chart = sequence_container.label_scores_chart
                 charts.append(chart.cpu().data.numpy())
             return charts
@@ -1086,7 +1084,7 @@ class NKChartParser(nn.Module):
                 sentence = sentences[i]
                 if self.f_tag is not None:
                     sentence = list(zip(per_sentence_tags[i], [x[1] for x in sentence]))
-                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
                 tree, score = self.parse_from_annotations(sequence_container, sentence, golds[i])
                 trees.append(tree)
                 scores.append(score)
@@ -1110,7 +1108,7 @@ class NKChartParser(nn.Module):
         glabels = []
         with torch.no_grad():
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
                 p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(sequence_container, sentences[i], golds[i])
                 paugment_total += p_augment
                 num_p += p_i.shape[0]
@@ -1140,7 +1138,7 @@ class NKChartParser(nn.Module):
 
     def parse_from_annotations(self, sequence_container, sentence, gold=None):
         is_train = gold is not None
-        label_scores_chart = self.label_scores_from_annotations(sequence_container)
+        label_scores_chart = sequence_container.label_scores_chart
         label_scores_chart_np = label_scores_chart.cpu().data.numpy()
 
         if is_train:
