@@ -620,6 +620,169 @@ class Encoder(nn.Module):
 
 # %%
 
+
+
+
+class RNNSequenceContainer(object):
+    @classmethod
+    def create_container(cls, fencepost_annotations_start, fencepost_annotations_end, f_label):
+        return cls(fencepost_annotations_start, fencepost_annotations_end, f_label)
+
+    def __init__(self, fencepost_annotations_start, fencepost_annotations_end, f_label):
+        self.f_label = f_label
+
+        # # Dimensions # #
+        # TODO: This should be wrapped.
+        # fencepost_annotations_start : length x hidden_dim
+        # span_features : length x length x hidden_dim
+        self.span_features = (torch.unsqueeze(fencepost_annotations_end, 0)
+             - torch.unsqueeze(fencepost_annotations_start, 1))
+        self.label_scores_chart = self.label_scores_from_annotations(self.span_features)
+
+    def label_scores_from_annotations(self, span_features):
+        label_scores_chart = self.f_label(span_features)
+        label_scores_chart = torch.cat([
+            label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
+            label_scores_chart
+            ], 2)
+        return label_scores_chart
+
+
+class DioraContainer(object):
+    def __init__(self, span_features, f_label):
+        self.f_label = f_label
+        # # Dimensions # #
+        # span_features : length x length x hidden_dim
+        self.span_features = span_features
+        self.label_scores_chart = self.label_scores_from_annotations(self.span_features)
+
+    def label_scores_from_annotations(self, span_features):
+        label_scores_chart = self.f_label(span_features)
+        label_scores_chart = torch.cat([
+            label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
+            label_scores_chart
+            ], 2)
+        return label_scores_chart
+
+
+class UnitNorm(object):
+    def __call__(self, x, p=2, eps=1e-8):
+        return x / x.norm(p=p, dim=-1, keepdim=True).clamp(min=eps)
+
+
+class Diora(nn.Module):
+    def __init__(self, input_size, f_label):
+        super().__init__()
+        self.unregistered = {}
+        self.unregistered['f_label'] = f_label
+
+        self.first_level = nn.Sequential(
+            nn.Linear(input_size, input_size),
+            # LayerNormalization(input_size),
+            nn.ReLU(),
+            nn.Linear(input_size, input_size),
+            nn.ReLU())
+
+        self.higher_level = nn.Sequential(
+            nn.Linear(input_size*2, input_size),
+            # LayerNormalization(input_size),
+            nn.ReLU(),
+            nn.Linear(input_size, input_size),
+            nn.ReLU())
+
+        self.compatibility = nn.Bilinear(input_size, input_size, 1, bias=True)
+
+        # self.higher_level_score = nn.Sequential(
+        #     nn.Linear(input_size*2, input_size),
+        #     # LayerNormalization(input_size),
+        #     nn.ReLU(),
+        #     nn.Linear(input_size, 1))
+
+    def higher_level_score(self, left, right, left_s, right_s):
+        return self.compatibility(left, right) + left_s + right_s
+
+    def build_chart(self, fencepost_annotations_start, fencepost_annotations_end):
+        # TODO: Do we need fencepost_annotations_end?
+        input_features = fencepost_annotations_start
+        length, _ = input_features.shape
+
+        span_features_template = (torch.unsqueeze(fencepost_annotations_end, 0)
+             - torch.unsqueeze(fencepost_annotations_start, 1)).detach()
+        device = span_features_template.device
+
+        span_features = torch.full(span_features_template.shape, 0, dtype=torch.float, device=device)
+        span_features_s = torch.full(span_features_template[:, :, :1].shape, 0, dtype=torch.float, device=device)
+
+        # Level 0
+        # span_features[0, :] = self.first_level(input_features)
+
+        pos = 0
+        size = 1
+        cells_per_level = length
+        boundary_start = torch.arange(pos, pos + cells_per_level, dtype=torch.long, device=device)
+        boundary_end = torch.arange(pos + size - 1, pos + size + cells_per_level - 1, dtype=torch.long, device=device)
+        span_features[boundary_start, boundary_end] = self.first_level(input_features)
+
+        for level in range(1, length):
+            cells_per_level = length - level
+            components_per_cell = level
+            size = level + 1
+            pos = 0
+
+            left, right = [], []
+            left_s, right_s = [], []
+            # verify = []
+
+            for i in range(components_per_cell):
+                left_level = i
+                left_pos = 0
+                left_size = left_level + 1
+                left_offset = left_pos + left_level
+                # left.append(span_features[left_level, left_offset:left_offset+cells_per_level])
+                right_level = level - i - 1
+                right_pos = 1
+                right_size = right_level + 1
+                right_offset = right_pos + right_level
+                # right.append(span_features[right_level, right_offset:right_offset+cells_per_level])
+                # verify.append(left[-1].clone().detach().fill_(i))
+
+                # NEW
+                left_boundary_start = torch.arange(left_pos, left_pos + cells_per_level, dtype=torch.long, device=device)
+                left_boundary_end = torch.arange(left_pos + left_size - 1, left_pos + left_size + cells_per_level - 1, dtype=torch.long, device=device)
+                right_boundary_start = torch.arange(right_pos, right_pos + cells_per_level, dtype=torch.long, device=device)
+                right_boundary_end = torch.arange(right_pos + right_size - 1, right_pos + right_size + cells_per_level - 1, dtype=torch.long, device=device)
+
+                left.append(span_features[left_boundary_start, left_boundary_end])
+                right.append(span_features[right_boundary_start, right_boundary_end])
+
+                left_s.append(span_features_s[left_boundary_start, left_boundary_end])
+                right_s.append(span_features_s[right_boundary_start, right_boundary_end])
+
+            left = torch.cat(left, 0)
+            right = torch.cat(right, 0)
+            left_s = torch.cat(left_s, 0)
+            right_s = torch.cat(right_s, 0)
+            # verify = torch.cat(verify, 0).view(components_per_cell, cells_per_level, -1)
+            component_features = torch.cat([left, right], 1)
+            cell_vectors = self.higher_level(component_features).view(components_per_cell, cells_per_level, -1)
+            cell_scores = self.higher_level_score(left, right, left_s, right_s).view(components_per_cell, cells_per_level, -1)
+            cell_scores_normalized = torch.softmax(cell_scores, dim=0)
+            # span_features[level, level:] = UnitNorm()(torch.sum(cell_vectors * cell_scores, dim=0))
+            # span_features[level, level:] = torch.sum(cell_vectors * cell_scores, dim=0)
+
+            # NEW
+            boundary_start = torch.arange(pos, pos + cells_per_level, dtype=torch.long, device=device)
+            boundary_end = torch.arange(pos + size - 1, pos + size + cells_per_level - 1, dtype=torch.long, device=device)
+            span_features[boundary_start, boundary_end] = UnitNorm()(torch.sum(cell_vectors * cell_scores_normalized, dim=0))
+            span_features_s[boundary_start, boundary_end] = torch.sum(cell_scores * cell_scores_normalized, dim=0)
+
+        return span_features
+
+    def create_container(self, fencepost_annotations_start, fencepost_annotations_end, f_label):
+        span_features = self.build_chart(fencepost_annotations_start, fencepost_annotations_end)
+        return DioraContainer(span_features, f_label)
+
+
 class NKChartParser(nn.Module):
     # We never actually call forward() end-to-end as is typical for pytorch
     # modules, but this inheritance brings in good stuff like state dict
@@ -756,6 +919,10 @@ class NKChartParser(nn.Module):
             nn.ReLU(),
             nn.Linear(hparams.d_label_hidden, label_vocab.size - 1),
             )
+
+        self.diora = None
+        if hparams.use_diora:
+            self.diora = Diora(input_size=hparams.d_model, f_label=self.f_label)
 
         if hparams.predict_tags:
             assert not hparams.use_tags, "use_tags and predict_tags are mutually exclusive"
@@ -1062,11 +1229,16 @@ class NKChartParser(nn.Module):
         fp_startpoints = batch_idxs.boundaries_np[:-1]
         fp_endpoints = batch_idxs.boundaries_np[1:] - 1
 
+        if self.diora is not None:
+            create_container = self.diora.create_container
+        else:
+            create_container = RNNSequenceContainer.create_container
+
         # Just return the charts, for ensembling
         if return_label_scores_charts:
             charts = []
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
+                sequence_container = create_container(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
                 chart = sequence_container.label_scores_chart
                 charts.append(chart.cpu().data.numpy())
             return charts
@@ -1084,7 +1256,7 @@ class NKChartParser(nn.Module):
                 sentence = sentences[i]
                 if self.f_tag is not None:
                     sentence = list(zip(per_sentence_tags[i], [x[1] for x in sentence]))
-                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
+                sequence_container = create_container(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
                 tree, score = self.parse_from_annotations(sequence_container, sentence, golds[i])
                 trees.append(tree)
                 scores.append(score)
@@ -1106,30 +1278,37 @@ class NKChartParser(nn.Module):
         gis = []
         gjs = []
         glabels = []
-        with torch.no_grad():
-            for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                sequence_container = RNNSequenceContainer(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
-                p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(sequence_container, sentences[i], golds[i])
-                paugment_total += p_augment
-                num_p += p_i.shape[0]
-                pis.append(p_i + start)
-                pjs.append(p_j + start)
-                gis.append(g_i + start)
-                gjs.append(g_j + start)
-                plabels.append(p_label)
-                glabels.append(g_label)
+        loss = None
+        # with torch.no_grad():
+        for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
+            sequence_container = create_container(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], self.f_label)
+            p_score, g_score, p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(sequence_container, sentences[i], golds[i])
+            paugment_total += p_augment
+            num_p += p_i.shape[0]
+            pis.append(p_i + start)
+            pjs.append(p_j + start)
+            gis.append(g_i + start)
+            gjs.append(g_j + start)
+            plabels.append(p_label)
+            glabels.append(g_label)
 
-        cells_i = from_numpy(np.concatenate(pis + gis))
-        cells_j = from_numpy(np.concatenate(pjs + gjs))
-        cells_label = from_numpy(np.concatenate(plabels + glabels))
+            local_num_p = p_i.shape[0]
+            local_cells_i = from_numpy(np.concatenate([p_i] + [g_i]))
+            local_cells_j = from_numpy(np.concatenate([p_j] + [g_j]))
+            local_cells_label = from_numpy(np.concatenate([p_label] + [g_label]))
 
-        cells_label_scores = self.f_label(fencepost_annotations_end[cells_j] - fencepost_annotations_start[cells_i])
-        cells_label_scores = torch.cat([
-                    cells_label_scores.new_zeros((cells_label_scores.size(0), 1)),
-                    cells_label_scores
-                    ], 1)
-        cells_scores = torch.gather(cells_label_scores, 1, cells_label[:, None])
-        loss = cells_scores[:num_p].sum() - cells_scores[num_p:].sum() + paugment_total
+            span_features = sequence_container.span_features
+            local_cells_label_scores = self.f_label(span_features[local_cells_i, local_cells_j])
+            local_cells_label_scores = torch.cat([
+                local_cells_label_scores.new_zeros((local_cells_label_scores.size(0), 1)),
+                local_cells_label_scores
+                ], 1)
+            local_cells_scores = torch.gather(local_cells_label_scores, 1, local_cells_label[:, None])
+            local_loss = local_cells_scores[:local_num_p].sum() - local_cells_scores[local_num_p:].sum() + p_augment
+            if loss is None:
+                loss = local_loss
+            else:
+                loss += local_loss
 
         if self.f_tag is not None:
             return None, (loss, tag_loss)
@@ -1151,7 +1330,7 @@ class NKChartParser(nn.Module):
 
             p_score, p_i, p_j, p_label, p_augment = chart_helper.decode(False, **decoder_args)
             g_score, g_i, g_j, g_label, g_augment = chart_helper.decode(True, **decoder_args)
-            return p_i, p_j, p_label, p_augment, g_i, g_j, g_label
+            return p_score, g_score, p_i, p_j, p_label, p_augment, g_i, g_j, g_label
         else:
             return self.decode_from_chart(sentence, label_scores_chart_np)
 
@@ -1204,24 +1383,3 @@ class NKChartParser(nn.Module):
 
         tree = make_tree()[0]
         return tree, score
-
-
-class RNNSequenceContainer(object):
-    def __init__(self, fencepost_annotations_start, fencepost_annotations_end, f_label):
-        self.f_label = f_label
-
-        # # Dimensions # #
-        # TODO: This should be wrapped.
-        # fencepost_annotations_start : length x hidden_dim
-        # span_features : length x length x hidden_dim
-        self.span_features = (torch.unsqueeze(fencepost_annotations_end, 0)
-             - torch.unsqueeze(fencepost_annotations_start, 1))
-        self.label_scores_chart = self.label_scores_from_annotations(self.span_features)
-
-    def label_scores_from_annotations(self, span_features):
-        label_scores_chart = self.f_label(span_features)
-        label_scores_chart = torch.cat([
-            label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
-            label_scores_chart
-            ], 2)
-        return label_scores_chart

@@ -83,6 +83,8 @@ def make_hparams():
         bert_model="bert-base-uncased",
         bert_do_lower_case=True,
         bert_transliterate="",
+
+        use_diora=False,
         )
 
 def run_train(args, hparams):
@@ -286,11 +288,14 @@ def run_train(args, hparams):
                 args.model_path_base, dev_fscore.fscore)
             best_dev_processed = total_processed
             print("Saving new best model to {}...".format(best_dev_model_path))
-            torch.save({
-                'spec': parser.spec,
-                'state_dict': parser.state_dict(),
-                'trainer' : trainer.state_dict(),
-                }, best_dev_model_path + ".pt")
+            if args.skip_save:
+                print('skip save is ON')
+            else:
+                torch.save({
+                    'spec': parser.spec,
+                    'state_dict': parser.state_dict(),
+                    'trainer' : trainer.state_dict(),
+                    }, best_dev_model_path + ".pt")
 
     for epoch in itertools.count(start=1):
         if args.epochs is not None and epoch > args.epochs:
@@ -574,6 +579,7 @@ def main():
     subparser.add_argument("--epochs", type=int)
     subparser.add_argument("--checks-per-epoch", type=int, default=4)
     subparser.add_argument("--print-vocabs", action="store_true")
+    subparser.add_argument("--skip-save", action="store_true")
 
     subparser = subparsers.add_parser("test")
     subparser.set_defaults(callback=run_test)

@@ -50,10 +50,15 @@ def decode(force_gold, sentence_len, label_scores_chart, is_train, gold, label_v
         else:
             oracle_label_chart, oracle_split_chart = ORACLE_PRECOMPUTED_TABLE[gold]
 
+    # print('START', label_scores_chart.shape)
+
     for length in range(1, sentence_len + 1):
         for left in range(0, sentence_len + 1 - length):
             right = left + length
 
+            assert right >= left
+
+            # Find best label for parent.
             if is_train or force_gold:
                 oracle_label_index = oracle_label_chart[left, right]
 
@@ -88,12 +93,14 @@ def decode(force_gold, sentence_len, label_scores_chart, is_train, gold, label_v
                 value_chart[left, right] = label_score
                 continue
 
+            # Find best split.
             if force_gold:
                 best_split = oracle_split_chart[left, right]
             else:
                 best_split = left + 1
                 split_val = NEG_INF
                 for split_idx in range(left + 1, right):
+                    # print(length, left, split_idx, right)
                     max_split_val = value_chart[left, split_idx] + value_chart[split_idx, right]
                     if max_split_val > split_val:
                         split_val = max_split_val
