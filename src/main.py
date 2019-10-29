@@ -213,6 +213,8 @@ def run_train(args, hparams):
     print("Initializing optimizer...")
     trainable_parameters = [param for param in parser.parameters() if param.requires_grad]
     trainer = torch.optim.Adam(trainable_parameters, lr=1., betas=(0.9, 0.98), eps=1e-9)
+    # trainer = torch.optim.RMSprop(trainable_parameters, lr=1.0, weight_decay=1e-2, momentum=0.9)
+    # trainer = torch.optim.SGD(trainable_parameters, lr=1.0, momentum=0.9)
     if load_path is not None:
         trainer.load_state_dict(info['trainer'])
 
@@ -229,10 +231,17 @@ def run_train(args, hparams):
         patience=hparams.step_decay_patience,
         verbose=True,
     )
+    # scheduler = torch.optim.lr_scheduler.CyclicLR(trainer, base_lr=hparams.learning_rate, max_lr=hparams.learning_rate*10)
+    scheduler_on_dev_best = True
+    scheduler_on_every_batch = False
+    scheduler_warmup = True
     def schedule_lr(iteration):
         iteration = iteration + 1
-        if iteration <= hparams.learning_rate_warmup_steps:
-            set_lr(iteration * warmup_coeff)
+        if scheduler_warmup:
+            if iteration <= hparams.learning_rate_warmup_steps:
+                set_lr(iteration * warmup_coeff)
+        if scheduler_on_every_batch:
+            scheduler.step()
 
     clippable_parameters = trainable_parameters
     grad_clip_threshold = np.inf if hparams.clip_grad_norm == 0 else hparams.clip_grad_norm
@@ -357,7 +366,8 @@ def run_train(args, hparams):
 
         # adjust learning rate at the end of an epoch
         if (total_processed // args.batch_size + 1) > hparams.learning_rate_warmup_steps:
-            scheduler.step(best_dev_fscore)
+            if scheduler_on_dev_best:
+                scheduler.step(best_dev_fscore)
             if (total_processed - best_dev_processed) > ((hparams.step_decay_patience + 1) * hparams.max_consecutive_decays * len(train_parse)):
                 print("Terminating due to lack of improvement in dev fscore.")
                 break

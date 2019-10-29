@@ -678,19 +678,28 @@ class Diora(nn.Module):
 
         self.first_level = nn.Sequential(
             nn.Linear(input_size, input_size),
-            # LayerNormalization(input_size),
+            LayerNormalization(input_size),
             nn.ReLU(),
             nn.Linear(input_size, input_size),
             nn.ReLU())
 
         self.higher_level = nn.Sequential(
             nn.Linear(input_size*2, input_size),
-            # LayerNormalization(input_size),
+            LayerNormalization(input_size),
             nn.ReLU(),
             nn.Linear(input_size, input_size),
             nn.ReLU())
 
         self.compatibility = nn.Bilinear(input_size, input_size, 1, bias=True)
+
+        init.xavier_normal_(self.first_level[0].weight)
+        init.xavier_normal_(self.first_level[3].weight)
+        init.constant_(self.first_level[3].bias, 1)
+        init.xavier_normal_(self.higher_level[0].weight)
+        init.xavier_normal_(self.higher_level[3].weight)
+        init.constant_(self.higher_level[3].bias, 1)
+        init.xavier_normal_(self.compatibility.weight)
+        init.constant_(self.compatibility.bias, 1)
 
         # self.higher_level_score = nn.Sequential(
         #     nn.Linear(input_size*2, input_size),
@@ -773,7 +782,8 @@ class Diora(nn.Module):
             # NEW
             boundary_start = torch.arange(pos, pos + cells_per_level, dtype=torch.long, device=device)
             boundary_end = torch.arange(pos + size - 1, pos + size + cells_per_level - 1, dtype=torch.long, device=device)
-            span_features[boundary_start, boundary_end] = UnitNorm()(torch.sum(cell_vectors * cell_scores_normalized, dim=0))
+            span_features[boundary_start, boundary_end] = torch.sum(cell_vectors * cell_scores_normalized, dim=0)
+            # span_features[boundary_start, boundary_end] = UnitNorm()(torch.sum(cell_vectors * cell_scores_normalized, dim=0))
             span_features_s[boundary_start, boundary_end] = torch.sum(cell_scores * cell_scores_normalized, dim=0)
 
         return span_features
