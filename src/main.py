@@ -380,6 +380,11 @@ def run_test(args):
         del _
         test_predicted.extend([p.convert() for p in predicted])
 
+    print('Writing to output.txt')
+    with open('output.txt', 'w') as f:
+        for ex in test_predicted:
+            f.write('{}\n'.format(ex.linearize().strip()))
+
     # The tree loader does some preprocessing to the trees (e.g. stripping TOP
     # symbols or SPMRL morphological features). We compare with the input file
     # directly to be extra careful about not corrupting the evaluation. We also
